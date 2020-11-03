@@ -6,8 +6,7 @@ from __future__ import division
 import tensorflow as tf
 import numpy as np
 
-weight_init = tf.contrib.layers.xavier_initializer()
-
+weight_init = tf.initializers.glorot_uniform()
 
 def instance_norm(x, scope='instance_norm'):
 
@@ -23,8 +22,9 @@ def instance_norm(x, scope='instance_norm'):
     normalized tensor.
 
     """
-    return tf.contrib.layers.instance_norm(
-        x, epsilon=1e-05, center=True, scale=True, scope=scope)
+    # return tf.contrib.layers.instance_norm(
+    #     x, epsilon=1e-05, center=True, scale=True, scope=scope)
+    return tf.keras.layers.LayerNormalization(axis = -1)(x)
 
 
 def conv2d(input_, output_dim, d_h=2, d_w=2, scope='conv_0',
@@ -50,32 +50,17 @@ def conv2d(input_, output_dim, d_h=2, d_w=2, scope='conv_0',
 
     """
 
-    k_initializer = tf.random_normal_initializer(stddev=0.02)
-    b_initializer = tf.constant_initializer(0)
+    k_initializer = tf.keras.initializers.RandomNormal(stddev=0.02)
     k_h = k_w = conv_filters_dim
 
-    with tf.variable_scope(scope):
-
-        if padding == 'zero':
-            x = tf.pad(
-                input_,
-                [[0, 0], [pad, pad], [pad, pad], [0, 0]])
-        elif padding == 'reflect':
-            x = tf.pad(
-                input_,
-                [[0, 0], [pad, pad], [pad, pad], [0, 0]],
-                mode='REFLECT')
-        else:
-            x = input_
-
-        conv = tf.layers.conv2d(
-            x,
-            output_dim,
-            kernel_size=[k_h, k_w],
-            strides=(d_h, d_w),
-            kernel_initializer=k_initializer,
-            bias_initializer=b_initializer,
-            use_bias=use_bias)
+    conv = tf.keras.layers.Conv2D(
+        output_dim,
+        kernel_size=[k_h, k_w],
+        strides=(d_h, d_w),
+        kernel_initializer=k_initializer,
+        bias_initializer='zeros',
+        use_bias=use_bias,
+        padding='same')(input_)
 
     return conv
 
@@ -100,20 +85,18 @@ def deconv2d(input_, output_dim, d_h=2, d_w=2, scope='deconv_0',
     deconv: tensor, output tenosr.
     """
 
-    k_initializer = tf.random_normal_initializer(stddev=0.02)
-    b_initializer = tf.constant_initializer(0)
+    k_initializer = tf.keras.initializers.RandomNormal(stddev=0.02)
     k_h = k_w = conv_filters_dim
 
-    deconv = tf.layers.conv2d_transpose(
-        input_,
+    deconv = tf.keras.layers.Conv2DTranspose(
         output_dim,
         kernel_size=[k_h, k_w],
         strides=(d_h, d_w),
         padding=padding,
         kernel_initializer=k_initializer,
-        bias_initializer=b_initializer,
+        bias_initializer='zeros',
         use_bias=use_bias,
-        name=scope)
+        name=scope)(input_)
 
     return deconv
 
@@ -130,7 +113,7 @@ def relu(input_):
     tensor.
 
     """
-    return tf.nn.relu(input_)
+    return tf.keras.layers.ReLU()(input_)
 
 
 def lrelu(input_):
@@ -145,7 +128,7 @@ def lrelu(input_):
     tensor.
 
     """
-    return tf.nn.leaky_relu(input_, alpha=0.01)
+    return tf.keras.layers.LeakyReLU( alpha=0.01)(input_)
 
 
 def tanh(input_):
@@ -160,7 +143,7 @@ def tanh(input_):
     tensor.
 
     """
-    return tf.tanh(input_)
+    return tf.keras.activations.tanh(input_)
 
 
 def l1_loss(x, y):

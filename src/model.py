@@ -6,12 +6,11 @@ import os
 import logging
 import numpy as np
 import tensorflow as tf
-import tensorflow.contrib.slim as slim
+from tensorflow import keras
+from tensorflow.keras import layers
+from matplotlib.pyplot import imsave
 
-from tensorflow.contrib.data import shuffle_and_repeat, map_and_batch
-
-from src.archs import discriminator, generator, vgg_16
-from scipy.misc import imsave
+from src.archs import *
 from src.data_loader import ImageData
 from utils.ops import l1_loss, content_loss, style_loss, angular_error
 
@@ -31,37 +30,40 @@ class Model(object):
         """
 
         self.params = params
-        self.global_step = tf.Variable(
-            0, dtype=tf.int32, trainable=False, name='global_step')
-        self.lr = tf.placeholder(tf.float32, shape=[], name='learning_rate')
+        self.global_step = tf.Variable(0, dtype=tf.int32, trainable=False, name='global_step')
+        self.lr = tf.Variable(0, dtype=tf.float32, trainable=False, name='learning_rate')
 
-        (self.train_iter, self.valid_iter,
-         self.test_iter, self.train_size) = self.data_loader()
+        (self.train_data, self.valid_data, self.test_data) = self.data_loader()
 
         # building graph
-        (self.x_r, self.angles_r, self.labels, self.x_t,
-         self.angles_g) = self.train_iter.get_next()
+        # (self.x_r, self.angles_r, self.labels, self.x_t,
+         # self.angles_g) = self.train_iter.get_next()
 
-        (self.x_valid_r, self.angles_valid_r, self.labels_valid,
-         self.x_valid_t, self.angles_valid_g) = self.valid_iter.get_next()
+        self.x_r = keras.Input(shape=(self.params.image_size, self.params.image_size, 3), name="x_r")
+        self.x_t = keras.Input(shape=(self.params.image_size, self.params.image_size, 3), name="x_t")
+        self.angles_r = keras.Input(shape=(2), name="angles_r")
+        self.angles_g = keras.Input(shape=(2), name="angles_g")
+        self.labels = keras.Input(shape=(1), name="labels")
 
-        (self.x_test_r, self.angles_test_r, self.labels_test,
-         self.x_test_t, self.angles_test_g) = self.test_iter.get_next()
+        # (self.x_valid_r, self.angles_valid_r, self.labels_valid,
+        #  self.x_valid_t, self.angles_valid_g) = self.valid_iter.get_next()
+
+        # (self.x_test_r, self.angles_test_r, self.labels_test,
+        #  self.x_test_t, self.angles_test_g) = self.test_iter.get_next()
 
         self.x_g = generator(self.x_r, self.angles_g)
         self.x_recon = generator(self.x_g, self.angles_r, reuse=True)
 
-        self.angles_valid_g = tf.random_uniform(
-            [params.batch_size, 2], minval=-1.0, maxval=1.0)
+        # self.angles_valid_g = tf.random_uniform([params.batch_size, 2], minval=-1.0, maxval=1.0)
 
-        self.x_valid_g = generator(self.x_valid_r, self.angles_valid_g,
-                                   reuse=True)
+        # self.x_valid_g = generator(self.x_valid_r, self.angles_valid_g,
+        #                            reuse=True)
 
         # reconstruction loss
         self.recon_loss = l1_loss(self.x_r, self.x_recon)
 
         # content loss and style loss
-        self.c_loss, self.s_loss = self.feat_loss()
+        # self.c_loss, self.s_loss = self.feat_loss()
 
         # regression losses and adversarial losses
         (self.d_loss, self.g_loss, self.reg_d_loss,
@@ -104,31 +106,11 @@ class Model(object):
              image_data_class.test_images_t,
              image_data_class.test_angles_g))
 
-        train_dataset = train_dataset.apply(
-            shuffle_and_repeat(train_dataset_num)).apply(
-            map_and_batch(image_data_class.image_processing,
-                          hps.batch_size,
-                          num_parallel_batches=8))
+        train_dataset = train_dataset.shuffle(8).repeat(train_dataset_num).map(image_data_class.image_processing).batch(hps.batch_size)
+        valid_dataset = test_dataset.shuffle(8).repeat(train_dataset_num).map(image_data_class.image_processing).batch(hps.batch_size)
+        test_dataset = test_dataset.shuffle(8).repeat(train_dataset_num).map(image_data_class.image_processing).batch(hps.batch_size)
 
-        valid_dataset = test_dataset.apply(
-            shuffle_and_repeat(test_dataset_num)).apply(
-            map_and_batch(image_data_class.image_processing,
-                          hps.batch_size,
-                          num_parallel_batches=8))
-
-        test_dataset = test_dataset.apply(
-            map_and_batch(image_data_class.image_processing,
-                          hps.batch_size,
-                          num_parallel_batches=8))
-
-        train_dataset_iterator = train_dataset.make_one_shot_iterator()
-        valid_dataset = valid_dataset.make_one_shot_iterator()
-        test_dataset_iterator = test_dataset.make_one_shot_iterator()
-
-        return (train_dataset_iterator,
-                valid_dataset,
-                test_dataset_iterator,
-                train_dataset_num)
+        return (train_dataset, valid_dataset, test_dataset)
 
     def adv_loss(self):
         """Build sub graph for discriminator and gaze estimator
@@ -136,7 +118,7 @@ class Model(object):
         Returns
         -------
         d_loss: scalar, adversarial loss for training discriminator.
-        g_loss: scalar, adcersarial loss ofr training generator.
+        g_loss: scalar, adversarial loss for training generator.
         reg_loss_d: scalar, MSE loss for training gaze estimator
         reg_loss_g: scalar, MSE loss for training generator
         gp: scalar, gradient penalty
@@ -147,11 +129,17 @@ class Model(object):
         gan_real, reg_real = discriminator(hps, self.x_r)
         gan_fake, reg_fake = discriminator(hps, self.x_g, reuse=True)
 
-        eps = tf.random_uniform(shape=[hps.batch_size, 1, 1, 1], minval=0.,
-                                maxval=1.)
-        interpolated = eps * self.x_r + (1. - eps) * self.x_g
-        gan_inter, _ = discriminator(hps, interpolated, reuse=True)
-        grad = tf.gradients(gan_inter, interpolated)[0]
+        self.d_real = gan_real
+
+        eps = tf.random.uniform(shape=[hps.batch_size, 1, 1, 1], minval=0.,maxval=1.)
+
+
+        with tf.GradientTape() as g:
+            g.watch(eps)
+            interpolated = eps * self.x_r + (1. - eps) * self.x_g
+            gan_inter, _ = discriminator(hps, interpolated, reuse=True)
+
+        grad = g.gradient(gan_inter, interpolated)
 
         slopes = tf.sqrt(tf.reduce_sum(tf.square(grad), axis=[1, 2, 3]))
         gp = tf.reduce_mean(tf.square(slopes - 1.))
@@ -165,27 +153,27 @@ class Model(object):
 
         return d_loss, g_loss, reg_loss_d, reg_loss_g, gp
 
-    def feat_loss(self):
-        """
-        build the sub graph of perceptual matching network
+    # def feat_loss(self):
+    #     """
+    #     build the sub graph of perceptual matching network
 
-        Returns
-        -------
-        c_loss: scalar, content loss
-        s_loss: scalar, style loss
-        """
+    #     Returns
+    #     -------
+    #     c_loss: scalar, content loss
+    #     s_loss: scalar, style loss
+    #     """
 
-        content_layers = ["vgg_16/conv5/conv5_3"]
-        style_layers = ["vgg_16/conv1/conv1_2", "vgg_16/conv2/conv2_2",
-                        "vgg_16/conv3/conv3_3", "vgg_16/conv4/conv4_3"]
+    #     content_layers = ["vgg_16/conv5/conv5_3"]
+    #     style_layers = ["vgg_16/conv1/conv1_2", "vgg_16/conv2/conv2_2",
+    #                     "vgg_16/conv3/conv3_3", "vgg_16/conv4/conv4_3"]
 
-        _, endpoints_mixed = vgg_16(
-            tf.concat([self.x_g, self.x_t], 0))
+    #     _, endpoints_mixed = vgg_16(
+    #         tf.concat([self.x_g, self.x_t], 0))
 
-        c_loss = content_loss(endpoints_mixed, content_layers)
-        s_loss = style_loss(endpoints_mixed, style_layers)
+    #     c_loss = content_loss(endpoints_mixed, content_layers)
+    #     s_loss = style_loss(endpoints_mixed, style_layers)
 
-        return c_loss, s_loss
+    #     return c_loss, s_loss
 
     def optimizer(self, lr):
         """Return an optimizer
@@ -202,11 +190,11 @@ class Model(object):
         hps = self.params
 
         if hps.optimizer == 'sgd':
-            return tf.train.GradientDescentOptimizer(lr)
+            return tf.keras.optimizers.SGD(lr)
         if hps.optimizer == 'adam':
-            return tf.train.AdamOptimizer(lr,
-                                          beta1=hps.adam_beta1,
-                                          beta2=hps.adam_beta2)
+            return tf.keras.optimizers.Adam(lr,
+                                          beta_1=hps.adam_beta1,
+                                          beta_2=hps.adam_beta2)
         raise AttributeError("attribute 'optimizer' is not assigned!")
 
     def add_optimizer(self):
@@ -218,25 +206,26 @@ class Model(object):
         d_op: update operation for discriminator.
         """
 
-        g_vars = tf.get_collection(
-            tf.GraphKeys.TRAINABLE_VARIABLES, scope='generator')
-        d_vars = tf.get_collection(
-            tf.GraphKeys.TRAINABLE_VARIABLES, scope='discriminator')
+        ### Pass in the models/layers here?
+        # g_vars = tf.get_collection(
+        #     tf.GraphKeys.TRAINABLE_VARIABLES, scope='generator')
+        # d_vars = tf.get_collection(
+        #     tf.GraphKeys.TRAINABLE_VARIABLES, scope='discriminator')
+        print(self.x_g)
+        g_vars = self.x_g.trainable_variables
+        d_vars = self.d_real.trainable_variables
 
         g_opt = self.optimizer(self.lr)
         d_opt = self.optimizer(self.lr)
 
         g_loss = (self.g_loss + 5.0 * self.reg_g_loss +
-                  50.0 * self.recon_loss +
-                  100.0 * self.s_loss + 100.0 * self.c_loss)
+                  50.0 * self.recon_loss)
+                  # 100.0 * self.s_loss +  100.0 * self.c_loss)### TODO Perceptual loss 
+                 
         d_loss = self.d_loss + 5.0 * self.reg_d_loss
 
-        g_op = g_opt.minimize(loss=g_loss,
-                              global_step=self.global_step,
-                              var_list=g_vars)
-        d_op = d_opt.minimize(loss=d_loss,
-                              global_step=self.global_step,
-                              var_list=d_vars)
+        g_op = g_opt.minimize(loss=g_loss, var_list=g_vars)
+        d_op = d_opt.minimize(loss=d_loss, var_list=d_vars)
 
         return d_op, g_op
 
@@ -280,11 +269,8 @@ class Model(object):
         hps = self.params
 
         num_epoch = hps.epochs
-        train_size = self.train_size
         batch_size = hps.batch_size
         learning_rate = hps.lr
-
-        num_iter = train_size // batch_size
 
         summary_dir = os.path.join(hps.log_dir, 'summary')
         model_path = os.path.join(hps.log_dir, 'model.ckpt')

@@ -1,8 +1,6 @@
 # Dataloader.
-
 import os
 import tensorflow as tf
-
 
 class ImageData(object):
 
@@ -98,9 +96,9 @@ class ImageData(object):
 
             """
 
-            x = tf.read_file(file_name)
+            x = tf.io.read_file(file_name)
             img = tf.image.decode_jpeg(x, channels=self.channels)
-            img = tf.image.resize_images(img, [self.load_size, self.load_size])
+            img = tf.image.resize(img, [self.load_size, self.load_size])
             img = tf.cast(img, tf.float32) / 127.5 - 1.0
 
             return img

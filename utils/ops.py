@@ -8,7 +8,7 @@ import numpy as np
 
 weight_init = tf.initializers.glorot_uniform()
 
-def instance_norm(x, scope='instance_norm'):
+def instance_norm():
 
     """ Wrapper of instance normalization.
 
@@ -22,13 +22,10 @@ def instance_norm(x, scope='instance_norm'):
     normalized tensor.
 
     """
-    # return tf.contrib.layers.instance_norm(
-    #     x, epsilon=1e-05, center=True, scale=True, scope=scope)
-    return tf.keras.layers.LayerNormalization(axis = -1)(x)
+    return tf.keras.layers.LayerNormalization(axis = -1)
 
 
-def conv2d(input_, output_dim, d_h=2, d_w=2, scope='conv_0',
-           conv_filters_dim=4, padding='zero', use_bias=True, pad=0):
+def conv2d(output_dim, d_h=2, d_w=2, conv_filters_dim=4, padding='zero', use_bias=True, pad=0, activation=None, name=None):
 
     """ Wrapper of convolutional operation.
 
@@ -53,20 +50,19 @@ def conv2d(input_, output_dim, d_h=2, d_w=2, scope='conv_0',
     k_initializer = tf.keras.initializers.RandomNormal(stddev=0.02)
     k_h = k_w = conv_filters_dim
 
-    conv = tf.keras.layers.Conv2D(
+    return tf.keras.layers.Conv2D(
         output_dim,
         kernel_size=[k_h, k_w],
         strides=(d_h, d_w),
         kernel_initializer=k_initializer,
         bias_initializer='zeros',
         use_bias=use_bias,
-        padding='same')(input_)
+        padding='same',
+        activation=activation,
+        name=name)
 
-    return conv
 
-
-def deconv2d(input_, output_dim, d_h=2, d_w=2, scope='deconv_0',
-             conv_filters_dim=4, padding='SAME', use_bias=True):
+def deconv2d(output_dim, d_h=2, d_w=2, conv_filters_dim=4, padding='SAME', use_bias=True):
     """Transposed convolution (fractional stride convolution) layer.
 
     Parameters
@@ -88,20 +84,17 @@ def deconv2d(input_, output_dim, d_h=2, d_w=2, scope='deconv_0',
     k_initializer = tf.keras.initializers.RandomNormal(stddev=0.02)
     k_h = k_w = conv_filters_dim
 
-    deconv = tf.keras.layers.Conv2DTranspose(
+    return tf.keras.layers.Conv2DTranspose(
         output_dim,
         kernel_size=[k_h, k_w],
         strides=(d_h, d_w),
         padding=padding,
         kernel_initializer=k_initializer,
         bias_initializer='zeros',
-        use_bias=use_bias,
-        name=scope)(input_)
-
-    return deconv
+        use_bias=use_bias)
 
 
-def relu(input_):
+def relu():
     """ Wrapper of ReLU function.
 
     Parameters
@@ -113,10 +106,10 @@ def relu(input_):
     tensor.
 
     """
-    return tf.keras.layers.ReLU()(input_)
+    return tf.keras.layers.ReLU()
 
 
-def lrelu(input_):
+def lrelu():
     """ Wrapper of LeakyReLU function.
 
     Parameters
@@ -128,22 +121,7 @@ def lrelu(input_):
     tensor.
 
     """
-    return tf.keras.layers.LeakyReLU( alpha=0.01)(input_)
-
-
-def tanh(input_):
-    """ Wrapper of tanh function.
-
-    Parameters
-    ----------
-    input_: tensor.
-
-    Returns
-    -------
-    tensor.
-
-    """
-    return tf.keras.activations.tanh(input_)
+    return tf.keras.layers.LeakyReLU( alpha=0.01)
 
 
 def l1_loss(x, y):

@@ -6,7 +6,6 @@ import os
 import logging
 import numpy as np
 import tensorflow as tf
-from tensorflow import keras
 from tensorflow.keras import layers
 from matplotlib.pyplot import imsave
 
@@ -39,11 +38,11 @@ class Model(object):
         # (self.x_r, self.angles_r, self.labels, self.x_t,
          # self.angles_g) = self.train_iter.get_next()
 
-        self.x_r = keras.Input(shape=(self.params.image_size, self.params.image_size, 3), name="x_r")
-        self.x_t = keras.Input(shape=(self.params.image_size, self.params.image_size, 3), name="x_t")
-        self.angles_r = keras.Input(shape=(2), name="angles_r")
-        self.angles_g = keras.Input(shape=(2), name="angles_g")
-        self.labels = keras.Input(shape=(1), name="labels")
+        self.x_r = tf.keras.Input(shape=(self.params.image_size, self.params.image_size, 3), name="x_r")
+        self.x_t = tf.keras.Input(shape=(self.params.image_size, self.params.image_size, 3), name="x_t")
+        self.angles_r = tf.keras.Input(shape=(2), name="angles_r")
+        self.angles_g = tf.keras.Input(shape=(2), name="angles_g")
+        self.labels = tf.keras.Input(shape=(1), name="labels")
 
         # (self.x_valid_r, self.angles_valid_r, self.labels_valid,
         #  self.x_valid_t, self.angles_valid_g) = self.valid_iter.get_next()
@@ -51,8 +50,10 @@ class Model(object):
         # (self.x_test_r, self.angles_test_r, self.labels_test,
         #  self.x_test_t, self.angles_test_g) = self.test_iter.get_next()
 
-        self.x_g = generator(self.x_r, self.angles_g)
-        self.x_recon = generator(self.x_g, self.angles_r, reuse=True)
+        self.x_g = generator(self.x_r, self.angles_g, is_input=True, name="x_g")
+
+        # self.x_recon = generator(self.x_g.get_layer("output").output, self.angles_r, is_input=False, name="x_recon")
+        self.x_recon = generator(self.x_g, self.angles_r, is_input=False, name="x_recon")
 
         # self.angles_valid_g = tf.random_uniform([params.batch_size, 2], minval=-1.0, maxval=1.0)
 
@@ -60,7 +61,7 @@ class Model(object):
         #                            reuse=True)
 
         # reconstruction loss
-        self.recon_loss = l1_loss(self.x_r, self.x_recon)
+        self.recon_loss = l1_loss(self.x_r, self.x_recon.get_layer("output2").output)
 
         # content loss and style loss
         # self.c_loss, self.s_loss = self.feat_loss()
@@ -70,14 +71,11 @@ class Model(object):
          self.reg_g_loss, self.gp) = self.adv_loss()
 
         # update operations for generator and discriminator
-        self.d_op, self.g_op = self.add_optimizer()
+        self.d_loss, self.g_loss = self.make_losses()
 
         # adding summaries
         self.summary = self.add_summary()
 
-        # initialization operation
-        self.init_op = tf.group(tf.global_variables_initializer(),
-                                tf.local_variables_initializer())
 
     def data_loader(self):
         """ load traing and testing dataset """
@@ -126,18 +124,16 @@ class Model(object):
 
         hps = self.params
 
-        gan_real, reg_real = discriminator(hps, self.x_r)
-        gan_fake, reg_fake = discriminator(hps, self.x_g, reuse=True)
-
-        self.d_real = gan_real
+        _, gan_real, reg_real = discriminator(hps, self.x_r, is_input=False)
+        self.d_real, gan_fake, reg_fake = discriminator(hps, self.x_g, is_input=True)
 
         eps = tf.random.uniform(shape=[hps.batch_size, 1, 1, 1], minval=0.,maxval=1.)
 
 
         with tf.GradientTape() as g:
             g.watch(eps)
-            interpolated = eps * self.x_r + (1. - eps) * self.x_g
-            gan_inter, _ = discriminator(hps, interpolated, reuse=True)
+            interpolated = eps * self.x_r + (1. - eps) * self.x_g.get_layer("output").output
+            _, gan_inter, _ = discriminator(hps, interpolated, inps=self.x_g.inputs)
 
         grad = g.gradient(gan_inter, interpolated)
 
@@ -175,29 +171,29 @@ class Model(object):
 
     #     return c_loss, s_loss
 
-    def optimizer(self, lr):
-        """Return an optimizer
+    # def optimizer(self, lr):
+    #     """Return an optimizer
 
-        Parameters
-        ----------
-        lr: learning rate.
+    #     Parameters
+    #     ----------
+    #     lr: learning rate.
 
-        Returns
-        -------
-        tensorflow Optimizer instance.
-        """
+    #     Returns
+    #     -------
+    #     tensorflow Optimizer instance.
+    #     """
 
-        hps = self.params
+    #     hps = self.params
 
-        if hps.optimizer == 'sgd':
-            return tf.keras.optimizers.SGD(lr)
-        if hps.optimizer == 'adam':
-            return tf.keras.optimizers.Adam(lr,
-                                          beta_1=hps.adam_beta1,
-                                          beta_2=hps.adam_beta2)
-        raise AttributeError("attribute 'optimizer' is not assigned!")
+    #     if hps.optimizer == 'sgd':
+    #         return tf.keras.optimizers.SGD(lr)
+    #     if hps.optimizer == 'adam':
+    #         return tf.keras.optimizers.Adam(lr,
+    #                                       beta_1=hps.adam_beta1,
+    #                                       beta_2=hps.adam_beta2)
+    #     raise AttributeError("attribute 'optimizer' is not assigned!")
 
-    def add_optimizer(self):
+    def make_losses(self):
         """Add an optimizer.
 
         Returns
@@ -211,23 +207,15 @@ class Model(object):
         #     tf.GraphKeys.TRAINABLE_VARIABLES, scope='generator')
         # d_vars = tf.get_collection(
         #     tf.GraphKeys.TRAINABLE_VARIABLES, scope='discriminator')
-        print(self.x_g)
         g_vars = self.x_g.trainable_variables
         d_vars = self.d_real.trainable_variables
 
-        g_opt = self.optimizer(self.lr)
-        d_opt = self.optimizer(self.lr)
-
-        g_loss = (self.g_loss + 5.0 * self.reg_g_loss +
-                  50.0 * self.recon_loss)
+        g_loss = (self.g_loss + 5.0 * self.reg_g_loss + 50.0 * self.recon_loss)
                   # 100.0 * self.s_loss +  100.0 * self.c_loss)### TODO Perceptual loss 
-                 
         d_loss = self.d_loss + 5.0 * self.reg_d_loss
 
-        g_op = g_opt.minimize(loss=g_loss, var_list=g_vars)
-        d_op = d_opt.minimize(loss=d_loss, var_list=d_vars)
 
-        return d_op, g_op
+        return d_loss, g_loss
 
     def add_summary(self):
         """Add summary operation.
@@ -238,29 +226,29 @@ class Model(object):
         """
 
         tf.summary.scalar('recon_loss', self.recon_loss)
-        tf.summary.scalar('g_loss', self.g_loss)
-        tf.summary.scalar('d_loss', self.d_loss)
-        tf.summary.scalar('reg_d_loss', self.reg_d_loss)
-        tf.summary.scalar('reg_g_loss', self.reg_g_loss)
+        # tf.summary.scalar('g_loss', self.g_loss)
+        # tf.summary.scalar('d_loss', self.d_loss)
+        # tf.summary.scalar('reg_d_loss', self.reg_d_loss)
+        # tf.summary.scalar('reg_g_loss', self.reg_g_loss)
         tf.summary.scalar('gp', self.gp)
         tf.summary.scalar('lr', self.lr)
-        tf.summary.scalar('c_loss', self.c_loss)
-        tf.summary.scalar('s_loss', self.s_loss)
+        # tf.summary.scalar('c_loss', self.c_loss)
+        # tf.summary.scalar('s_loss', self.s_loss)
 
         tf.summary.image('real', (self.x_r + 1) / 2.0, max_outputs=5)
         tf.summary.image('fake', tf.clip_by_value(
-            (self.x_g + 1) / 2.0, 0., 1.), max_outputs=5)
+            (self.x_g.get_layer("output").output + 1) / 2.0, 0., 1.), max_outputs=5)
         tf.summary.image('recon', tf.clip_by_value(
-            (self.x_recon + 1) / 2.0, 0., 1.), max_outputs=5)
+            (self.x_recon.get_layer("output2").output + 1) / 2.0, 0., 1.), max_outputs=5)
 
-        tf.summary.image('x_test', tf.clip_by_value(
-            (self.x_valid_r + 1) / 2.0, 0., 1.), max_outputs=5)
-        tf.summary.image('x_test_fake', tf.clip_by_value(
-            (self.x_valid_g + 1) / 2.0, 0., 1.), max_outputs=5)
+        # tf.summary.image('x_test', tf.clip_by_value(
+        #     (self.x_valid_r + 1) / 2.0, 0., 1.), max_outputs=5)
+        # tf.summary.image('x_test_fake', tf.clip_by_value(
+        #     (self.x_valid_g + 1) / 2.0, 0., 1.), max_outputs=5)
 
-        summary_op = tf.summary.merge_all()
+        # summary_op = tf.summary.merge_all()
 
-        return summary_op
+        # return summary_op
 
     def train(self):
         """Train the model and save checkpoints.
@@ -272,58 +260,52 @@ class Model(object):
         batch_size = hps.batch_size
         learning_rate = hps.lr
 
+        num_iter = 10
+
         summary_dir = os.path.join(hps.log_dir, 'summary')
         model_path = os.path.join(hps.log_dir, 'model.ckpt')
 
-        tf_config = tf.ConfigProto()
-        tf_config.gpu_options.allow_growth = True
+        # summary_writer = tf.summary.FileWriter(summary_dir, graph=sess.graph)
+        # saver = tf.train.Saver(max_to_keep=3)
 
-        with tf.Session(config=tf_config) as sess:
+        # variables_to_restore = slim.get_variables_to_restore(
+        #     include=['vgg_16'])
+        # restorer = tf.train.Saver(variables_to_restore)
+        # restorer.restore(sess, hps.vgg_path)
 
-            # init
-            sess.run([self.init_op])
+        self.d_real.compile()
+        foo = iter(self.train_data)
 
-            summary_writer = tf.summary.FileWriter(summary_dir,
-                                                   graph=sess.graph)
+        try:
+            for epoch in range(num_epoch):
+                print("Epoch: %d" % epoch)
 
-            saver = tf.train.Saver(max_to_keep=3)
+                if epoch >= hps.epochs / 2:
+                    learning_rate = (2. - 2. * epoch / hps.epochs) * hps.lr
 
-            variables_to_restore = slim.get_variables_to_restore(
-                include=['vgg_16'])
-            restorer = tf.train.Saver(variables_to_restore)
-            restorer.restore(sess, hps.vgg_path)
+                for it in range(num_iter):
+                    # feed_d = {self.lr: learning_rate}
+                    # sess.run([self.d_op], feed_dict=feed_d)
+                    # self.d_op(learning_rate)
 
-            try:
+                    self.d_real.train_on_batch(foo.get_next())
 
-                for epoch in range(num_epoch):
+                    if it % 5 == 0:
+                        # sess.run(self.g_op, feed_dict=feed_d)
+                        self.g_op(learning_rate)
 
-                    print("Epoch: %d" % epoch)
+                    if it % hps.summary_steps == 0:
 
-                    if epoch >= hps.epochs / 2:
+                        summary, global_step = sess.run(
+                            [self.summary, self.global_step],
+                            feed_dict=feed_d)
+                        summary_writer.add_summary(summary, global_step)
+                        summary_writer.flush()
+                        saver.save(sess, model_path,
+                                   global_step=global_step)
 
-                        learning_rate = (2. - 2. * epoch / hps.epochs) * hps.lr
-
-                    for it in range(num_iter):
-
-                        feed_d = {self.lr: learning_rate}
-
-                        sess.run([self.d_op], feed_dict=feed_d)
-
-                        if it % 5 == 0:
-                            sess.run(self.g_op, feed_dict=feed_d)
-
-                        if it % hps.summary_steps == 0:
-
-                            summary, global_step = sess.run(
-                                [self.summary, self.global_step],
-                                feed_dict=feed_d)
-                            summary_writer.add_summary(summary, global_step)
-                            summary_writer.flush()
-                            saver.save(sess, model_path,
-                                       global_step=global_step)
-
-            except KeyboardInterrupt:
-                print("stop training")
+        except KeyboardInterrupt:
+            print("stop training")
 
     def eval(self):
         """ Evaluation. """
